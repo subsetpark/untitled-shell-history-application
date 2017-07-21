@@ -6,7 +6,7 @@ const help = """
 hist: search your command-line history.
 
 Usage:
-  hist create
+  hist init
   hist clean [DAYS]
   hist update CMD
   hist [DIR] [-n N] [-s SEARCHSTRING] [-t] [-v]
@@ -27,11 +27,13 @@ var
   db: DbConn
   verbosity = vNormal
 
+const
+  tableName = "history"
+
 proc openDb(): DbConn =
-  ## Open a DB connection and ensure presence of tables.
+  ## Open a DB connection.
   const dbName = ".esdb"
-  let
-    dbPath = getHomeDir() / dbName
+  let dbPath = getHomeDir() / dbName
 
   db = open(dbPath, nil, nil, nil)
   return db
@@ -52,7 +54,7 @@ proc search(
 ): seq[Row] =
   ## Search the database for commands.
   const
-    selectStmt          = "SELECT cmd, count$1 FROM history "
+    selectStmt          = "SELECT cmd, count$1 FROM ? "
     datetimeConversion  = "datetime(entered_on, \"localtime\")"
     orderByStr          = "ORDER BY $1 DESC "
     limitStmt           = "LIMIT ? "
@@ -66,7 +68,7 @@ proc search(
     # as well as command and count.
     q = selectStmt % (if orderBy == obEnteredOn: ", " & datetimeConversion else: "")
     # Keep a list of args to be included for parameter interpolation.
-    args: seq[string] = @[]
+    args: seq[string] = @[tableName]
     addedWhere = false
 
   proc handleWhere() =
@@ -128,17 +130,17 @@ proc displayResults(results: seq[Row]) =
 proc createTables() {.raises: [].} =
   try:
     db.exec sql"""
-      CREATE TABLE IF NOT EXISTS history (
+      CREATE TABLE IF NOT EXISTS ? (
           id          INTEGER PRIMARY KEY,
           cwd         VARCHAR(256),
           cmd         VARCHAR(4096),
           count       INTEGER,
           entered_on  DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-      CREATE UNIQUE INDEX IF NOT EXISTS command_idx ON history (cwd, cmd);
-      CREATE INDEX IF NOT EXISTS count_order_idx ON history (count);
-      CREATE INDEX IF NOT EXISTS entered_order_idx ON history (entered_on);
-      """
+      CREATE UNIQUE INDEX IF NOT EXISTS command_idx ON ? (cwd, cmd);
+      CREATE INDEX IF NOT EXISTS count_order_idx ON ? (count);
+      CREATE INDEX IF NOT EXISTS entered_order_idx ON ? (entered_on);
+      """, tableName, tableName, tableName, tableName
   except DbError:
     quit "Could not initialize hist database."
 
@@ -146,11 +148,11 @@ proc insert(cwd, cmd: string) {.raises: [].} =
   if filter(cmd):
     try:
       db.exec sql"""
-        INSERT OR REPLACE INTO history
+        INSERT OR REPLACE INTO ?
           (cwd, cmd, count) VALUES
           (?, ?, COALESCE(
-            (SELECT count FROM history WHERE cwd=? AND cmd=?), 0) + 1)
-          """, cwd, cmd, cwd, cmd
+            (SELECT count FROM ? WHERE cwd=? AND cmd=?), 0) + 1)
+          """, tableName, cwd, cmd, tableName, cwd, cmd
     except DbError:
       quit "Could not insert command into hist database."
 
@@ -158,9 +160,9 @@ proc clean(args: Table[string, docopt.Value]) {.raises: [].} =
   try:
     let
       timedelta = "-$1 day" % $args["DAYS"]
-      q = "DELETE FROM history WHERE entered_on <= date('now', ?)"
+      q = "DELETE FROM ? WHERE entered_on <= date('now', ?)"
 
-    db.exec q.sql, timedelta
+    db.exec q.sql, tableName, timedelta
   except DbError:
     quit "Could not clean hist database."
   except ValueError:
@@ -186,8 +188,12 @@ proc main(args: Table[string, docopt.Value]) {.raises: [].} =
     quit "Value supplied for -n out of bounds."
   except OSError:
     quit "No such directory."
-  except DbError:
-    quit "Could not access hist database file."
+  except DbError as e:
+    case e.msg
+    of "no such table: $1" % tableName:
+      quit "History database not initialized. Did you run `hist init`?"
+    else:
+      quit "Could not access hist database file."
 
 when isMainModule:
   var args = docopt(help)
@@ -195,10 +201,14 @@ when isMainModule:
   if args["-v"]:
     verbosity = vVerbose
 
-  discard openDb()
+  try:
+    discard openDb()
+  except DbError:
+    quit "Could not connect to database. Have you run `hist init`?"
+
   defer: closeDb()
 
-  if args["create"]:
+  if args["init"]:
     createTables()
 
   elif args["update"]:
