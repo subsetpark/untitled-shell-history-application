@@ -3,23 +3,29 @@
 import db_sqlite, os, docopt, strutils, sequtils
 
 const help = """
-hist
+hist: search your command-line history.
 
 Usage:
   hist create
-  hist -u CMD
-  hist [DIR] [-n N] [-s SEARCHSTRING] [-t]
+  hist clean [DAYS]
+  hist update CMD
+  hist [DIR] [-n N] [-s SEARCHSTRING] [-t] [-v]
 
 Options:
-
-  DIR             Directory to search within. [default: .]
-  -u CMD          Insert command into database.
+  DIR             Directory to search within.
+  CMD          Insert command into database.
+  DAYS         Number of days of history to preserve. [default: 60]
   -n N            Retrieve the N most common commands. [default: 5]
   -s SEARCHSTRING Search for commands containing a string.
   -t              Order by most recently entered.
+  -v              Verbose.
 """
+type Verbosity = enum
+  vNormal, vVerbose
 
-var db: DbConn
+var
+  db: DbConn
+  verbosity = vNormal
 
 proc openDb(): DbConn =
   ## Open a DB connection and ensure presence of tables.
@@ -34,17 +40,20 @@ proc closeDb() =
   ## Close the DB connection.
   db.close()
 
+type OrderBy = enum
+  obCount = "count"
+  obEnteredOn = "entered_on"
+
 proc search(
   cwd: string,
   limit: int,
   containsStr: string,
-  orderByDate = false
+  orderBy: OrderBy
 ): seq[Row] =
   const
     selectStmt          = "SELECT cmd, count$1 FROM history "
     datetimeConversion  = "datetime(entered_on, \"localtime\")"
-    orderByCount        = "ORDER BY count DESC "
-    orderByEntered      = "ORDER BY entered_on DESC "
+    orderByStr          = "ORDER BY $1 DESC "
     limitStmt           = "LIMIT ? "
     where               = "WHERE "
     whereAnd            = "AND "
@@ -52,6 +61,7 @@ proc search(
     whereLike           = "cmd LIKE ? "
 
   var
+    orderByDate = orderBy == obEnteredOn
     q = selectStmt % (if orderByDate: ", " & datetimeConversion else: "")
     args: seq[string] = @[]
     addedWhere = false
@@ -73,13 +83,14 @@ proc search(
     q.add whereLike
     args.add("%$1%" % containsStr)
 
-  if orderByDate:
-    q.add orderByEntered
-  else:
-    q.add orderByCount
-
+  q.add orderByStr % $orderBy
   q.add limitStmt
   args.add $limit
+
+  if verbosity == vVerbose:
+    echo "Executing query:\n$1\nwith $2 argument(s): $3\n" % [
+      q, $args.len, args.join(", ")
+    ]
 
   db.getAllRows(q.sql, args)
 
@@ -134,6 +145,18 @@ proc insert(cwd, cmd: string) {.raises: [].} =
     except DbError:
       quit "Could not insert command into hist database."
 
+proc clean(args: Table[string, docopt.Value]) {.raises: [].} =
+  try:
+    let
+      timedelta = "-$1 day" % $args["DAYS"]
+      q = "DELETE FROM history WHERE entered_on <= date('now', ?)"
+
+    db.exec q.sql, timedelta
+  except DbError:
+    quit "Could not clean hist database."
+  except ValueError:
+    quit "Argument provided to `clean` must be a number."
+
 proc main(args: Table[string, docopt.Value], results: var seq[Row]) {.raises: [].} =
   try:
 
@@ -141,9 +164,10 @@ proc main(args: Table[string, docopt.Value], results: var seq[Row]) {.raises: []
       n = ($args["-n"]).parseInt
       containsStr = if args["-s"]: $args["-s"] else: nil
       cwd = if args["DIR"]: expandFileName($args["DIR"]) else: nil
+      orderBy = if args["-t"]: obEnteredOn else: obCount
 
     results = search(
-      cwd, n, containsStr, args["-t"]
+      cwd, n, containsStr, orderBy
     )
 
   except ValueError:
@@ -163,14 +187,20 @@ when isMainModule:
     args = docopt(help)
     results: seq[Row]
 
+  if args["-v"]:
+    verbosity = vVerbose
+
   discard openDb()
   defer: closeDb()
 
   if args["create"]:
     createTables()
 
-  elif args["-u"]:
-    insert(getCurrentDir(), $args["-u"])
+  elif args["update"]:
+    insert(getCurrentDir(), $args["CMD"])
+
+  elif args["clean"]:
+    clean(args)
 
   else:
     main(args, results)
