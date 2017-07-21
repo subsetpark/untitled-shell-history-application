@@ -2,7 +2,7 @@
 
 version       = "0.1.0"
 author        = "Zach Smith"
-description   = "shell history db"
+description   = "untitled shell history application"
 license       = "MIT"
 
 # Dependencies
@@ -10,4 +10,4 @@ license       = "MIT"
 requires "nim >= 0.17.0"
 requires "docopt"
 
-bin = @["hist"]
+bin = @["usha"]

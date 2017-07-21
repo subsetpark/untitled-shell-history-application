@@ -2,14 +2,16 @@
 ## shell commands along with their frequency.
 import db_sqlite, os, docopt, strutils, sequtils
 
-const help = """
+const
+  programName = "usha"
+  help = """
 hist: search your command-line history.
 
 Usage:
-  hist init
-  hist clean [DAYS]
-  hist update CMD
-  hist [DIR] [-n N] [-s SEARCHSTRING] [-t] [-v]
+  $1 init [-v]
+  $1 clean [DAYS]
+  $1 update [-v] CMD
+  $1 [DIR] [-n N] [-s SEARCHSTRING] [-t] [-v]
 
 Options:
   DIR             Directory to search within.
@@ -19,7 +21,7 @@ Options:
   -s SEARCHSTRING Search for commands containing a string.
   -t              Order by most recently entered.
   -v              Verbose.
-"""
+""" % programName
 type Verbosity = enum
   vNormal, vVerbose
 
@@ -44,6 +46,7 @@ proc closeDb() =
 
 type OrderBy = enum
   obCount = "count"
+  obSumCount = "SUM(count)"
   obEnteredOn = "entered_on"
 
 proc search(
@@ -54,7 +57,7 @@ proc search(
 ): seq[Row] =
   ## Search the database for commands.
   const
-    selectStmt          = "SELECT cmd, count$1 FROM ? "
+    selectStmt          = "SELECT cmd, $1$2 FROM ? "
     datetimeConversion  = "datetime(entered_on, \"localtime\")"
     orderByStr          = "ORDER BY $1 DESC "
     limitStmt           = "LIMIT ? "
@@ -62,11 +65,16 @@ proc search(
     whereAnd            = "AND "
     whereCwd            = "cwd = ? "
     whereLike           = "cmd LIKE ? "
+    groupBy             = "GROUP BY cmd "
   # Start building a SQL query.
   var
-    # If the search is ordered by time, include the most-recent-usage timestamp
-    # as well as command and count.
-    q = selectStmt % (if orderBy == obEnteredOn: ", " & datetimeConversion else: "")
+    q = selectStmt % [
+      # In global search, work with total command counts
+      (if cwd.isNil: "SUM(count)" else: "count"),
+      # If the search is ordered by time, include the most-recent-usage timestamp
+      # as well as command and count.
+      (if orderBy == obEnteredOn: ", " & datetimeConversion else: "")
+    ]
     # Keep a list of args to be included for parameter interpolation.
     args: seq[string] = @[tableName]
     addedWhere = false
@@ -92,6 +100,10 @@ proc search(
     q.add whereLike
     args.add("%$1%" % containsStr)
 
+  if cwd.isNil:
+    # In global search, only show each command once.
+    q.add groupBy
+
   # Add the ordering and limit clauses.
   q.add orderByStr % $orderBy
   q.add limitStmt
@@ -106,7 +118,7 @@ proc search(
 
 proc filter(cmd: string): bool =
   ## Maintain a list of common commands not to be included.
-  const stopWords = ["hist", "exit"]
+  const stopWords = [programName, "exit"]
   case cmd
   of "":
     false
@@ -127,7 +139,7 @@ proc displayResults(results: seq[Row]) =
 
 # User functions
 
-proc createTables() {.raises: [].} =
+proc init() {.raises: [].} =
   try:
     db.exec sql"""
       CREATE TABLE IF NOT EXISTS ? (
@@ -136,13 +148,26 @@ proc createTables() {.raises: [].} =
           cmd         VARCHAR(4096),
           count       INTEGER,
           entered_on  DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS command_idx ON ? (cwd, cmd);
-      CREATE INDEX IF NOT EXISTS count_order_idx ON ? (count);
-      CREATE INDEX IF NOT EXISTS entered_order_idx ON ? (entered_on);
-      """, tableName, tableName, tableName, tableName
-  except DbError:
-    quit "Could not initialize hist database."
+      )""", tableName
+    db.exec sql"CREATE UNIQUE INDEX IF NOT EXISTS command_idx ON ? (cwd, cmd)", tableName
+    db.exec sql"CREATE INDEX IF NOT EXISTS count_order_idx ON ? (count)", tableName
+    db.exec sql"CREATE INDEX IF NOT EXISTS entered_order_idx ON ? (entered_on)", tableName
+  except DbError as e:
+    if verbosity == vVerbose:
+      echo "Error: ", e.msg
+    try:
+      quit "Could not initialize $1 database." % programName
+    except ValueError:
+      quit "Unknown failure during database initialization."
+
+proc handleDbError(e: ref DbError, msg: string) =
+    case e.msg
+    of "no such table: $1" % tableName:
+      quit "History database not initialized. Did you run `$1 init`?" % programName
+    else:
+      if verbosity == vVerbose:
+        echo e.msg
+      quit msg
 
 proc insert(cwd, cmd: string) {.raises: [].} =
   if filter(cmd):
@@ -153,8 +178,11 @@ proc insert(cwd, cmd: string) {.raises: [].} =
           (?, ?, COALESCE(
             (SELECT count FROM ? WHERE cwd=? AND cmd=?), 0) + 1)
           """, tableName, cwd, cmd, tableName, cwd, cmd
-    except DbError:
-      quit "Could not insert command into hist database."
+    except DbError as e:
+      try:
+        handleDbError(e, "Could not insert command into $1 database." % programName)
+      except ValueError:
+        quit "Unknown failure during database insertion."
 
 proc clean(args: Table[string, docopt.Value]) {.raises: [].} =
   try:
@@ -164,21 +192,30 @@ proc clean(args: Table[string, docopt.Value]) {.raises: [].} =
 
     db.exec q.sql, tableName, timedelta
   except DbError:
-    quit "Could not clean hist database."
+    quit "Could not clean $1 database." % programName
   except ValueError:
     quit "Argument provided to `clean` must be a number."
 
 proc main(args: Table[string, docopt.Value]) {.raises: [].} =
   ## Parse command arguments and perform a search of the history database.
   try:
+    var orderBy: OrderBy
 
     let
       n = ($args["-n"]).parseInt
       containsStr = if args["-s"]: $args["-s"] else: nil
       cwd = if args["DIR"]: expandFileName($args["DIR"]) else: nil
-      orderBy = if args["-t"]: obEnteredOn else: obCount
-      results = search(cwd, n, containsStr, orderBy)
+    # Ordering: in time-based ordering, order by time most recently entered.
+    # Otherwise, use count; within a single directory, use the count for that
+    # entry; otherwise, use the sum of counts for all entries for that command.
+    if args["-t"]:
+      orderBy = obEnteredOn
+    elif cwd.isNil:
+      orderBy = obSumCount
+    else:
+      orderBy = obCount
 
+    let results = search(cwd, n, containsStr, orderBy)
     if results.len > 0:
       displayResults(results)
 
@@ -189,11 +226,10 @@ proc main(args: Table[string, docopt.Value]) {.raises: [].} =
   except OSError:
     quit "No such directory."
   except DbError as e:
-    case e.msg
-    of "no such table: $1" % tableName:
-      quit "History database not initialized. Did you run `hist init`?"
-    else:
-      quit "Could not access hist database file."
+    try:
+      handleDbError(e, "Could not access $1 database file." % programName)
+    except ValueError:
+      quit "Unknown error during database search."
 
 when isMainModule:
   var args = docopt(help)
@@ -201,15 +237,11 @@ when isMainModule:
   if args["-v"]:
     verbosity = vVerbose
 
-  try:
-    discard openDb()
-  except DbError:
-    quit "Could not connect to database. Have you run `hist init`?"
-
+  discard openDb()
   defer: closeDb()
 
   if args["init"]:
-    createTables()
+    init()
 
   elif args["update"]:
     insert(getCurrentDir(), $args["CMD"])
