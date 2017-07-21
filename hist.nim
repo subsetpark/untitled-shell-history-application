@@ -50,6 +50,7 @@ proc search(
   containsStr: string,
   orderBy: OrderBy
 ): seq[Row] =
+  ## Search the database for commands.
   const
     selectStmt          = "SELECT cmd, count$1 FROM history "
     datetimeConversion  = "datetime(entered_on, \"localtime\")"
@@ -59,14 +60,18 @@ proc search(
     whereAnd            = "AND "
     whereCwd            = "cwd = ? "
     whereLike           = "cmd LIKE ? "
-
+  # Start building a SQL query.
   var
-    orderByDate = orderBy == obEnteredOn
-    q = selectStmt % (if orderByDate: ", " & datetimeConversion else: "")
+    # If the search is ordered by time, include the most-recent-usage timestamp
+    # as well as command and count.
+    q = selectStmt % (if orderBy == obEnteredOn: ", " & datetimeConversion else: "")
+    # Keep a list of args to be included for parameter interpolation.
     args: seq[string] = @[]
     addedWhere = false
 
   proc handleWhere() =
+    ## Ensure that a filter begins with a WHERE and additional conditions are
+    ## added with AND.
     if addedWhere:
       q.add whereAnd
     else:
@@ -74,15 +79,18 @@ proc search(
       addedWhere = true
 
   if not cwd.isNil:
+    # If a directory was specified, add a lookup against `cwd`.
     handleWhere()
     q.add whereCwd
     args.add cwd
 
   if not containsStr.isNil:
+    # If a search string was specified, add a LIKE clause.
     handleWhere()
     q.add whereLike
     args.add("%$1%" % containsStr)
 
+  # Add the ordering and limit clauses.
   q.add orderByStr % $orderBy
   q.add limitStmt
   args.add $limit
@@ -92,9 +100,10 @@ proc search(
       q, $args.len, args.join(", ")
     ]
 
-  db.getAllRows(q.sql, args)
+  result = db.getAllRows(q.sql, args)
 
 proc filter(cmd: string): bool =
+  ## Maintain a list of common commands not to be included.
   const stopWords = ["hist", "exit"]
   case cmd
   of "":
@@ -157,7 +166,8 @@ proc clean(args: Table[string, docopt.Value]) {.raises: [].} =
   except ValueError:
     quit "Argument provided to `clean` must be a number."
 
-proc main(args: Table[string, docopt.Value], results: var seq[Row]) {.raises: [].} =
+proc main(args: Table[string, docopt.Value]) {.raises: [].} =
+  ## Parse command arguments and perform a search of the history database.
   try:
 
     let
@@ -165,10 +175,10 @@ proc main(args: Table[string, docopt.Value], results: var seq[Row]) {.raises: []
       containsStr = if args["-s"]: $args["-s"] else: nil
       cwd = if args["DIR"]: expandFileName($args["DIR"]) else: nil
       orderBy = if args["-t"]: obEnteredOn else: obCount
+      results = search(cwd, n, containsStr, orderBy)
 
-    results = search(
-      cwd, n, containsStr, orderBy
-    )
+    if results.len > 0:
+      displayResults(results)
 
   except ValueError:
     quit "Value supplied for -n must be a number."
@@ -179,13 +189,8 @@ proc main(args: Table[string, docopt.Value], results: var seq[Row]) {.raises: []
   except DbError:
     quit "Could not access hist database file."
 
-  if results.len > 0:
-    displayResults(results)
-
 when isMainModule:
-  var
-    args = docopt(help)
-    results: seq[Row]
+  var args = docopt(help)
 
   if args["-v"]:
     verbosity = vVerbose
@@ -203,4 +208,4 @@ when isMainModule:
     clean(args)
 
   else:
-    main(args, results)
+    main(args)
