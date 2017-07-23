@@ -26,7 +26,7 @@ Options:
 """ % programName
 
 proc filter(stopWords: HashSet[string], cmd: string): bool =
-  ## Verify that a word is not 0-length and is not in the ignore
+  ## Verify that a command is not 0-length and is not in the ignore
   ## list.
   case cmd
   of "":

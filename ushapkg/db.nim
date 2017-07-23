@@ -62,27 +62,36 @@ proc dbSearch*(
 ): seq[SearchResponse] =
   ## Search the database for commands.
   const
-    selectStmt          = "SELECT cmd, $1$2 FROM ? "
+    selectStmt          = "SELECT $1 FROM $2"
+    sumCount            = "SUM(count)"
+    justCount           = "count"
     datetimeConversion  = "datetime(entered_on, \"localtime\")"
-    orderByStr          = "ORDER BY $1 DESC "
-    limitStmt           = "LIMIT ? "
-    where               = "WHERE "
-    whereAnd            = "AND "
-    whereCwd            = "cwd = ? "
-    whereLike           = "cmd LIKE ? "
-    groupBy             = "GROUP BY cmd "
+    where               = "WHERE"
+    whereAnd            = "AND"
+    whereCwd            = "cwd = ?"
+    whereLike           = "cmd LIKE ?"
+    orderByStr          = "ORDER BY $1 DESC"
+    limitStmt           = "LIMIT ?"
+    groupBy             = "GROUP BY cmd"
   # Start building a SQL query.
+  let orderByTimeStamp = orderBy == obEnteredOn
+  var selectColumns = @["cmd"]
+
+  if cwd.isNil:
+    # In global search, work with total command counts.
+    selectColumns.add(sumCount)
+  else:
+    selectColumns.add(justCount)
+  if orderByTimeStamp:
+    # If the search is ordered by time, include the
+    # most-recent-usage timestamp as well as command and count.
+    selectColumns.add(datetimeConversion)
+
   var
-    orderByTimeStamp = orderBy == obEnteredOn
-    q = selectStmt % [
-      # In global search, work with total command counts
-      (if cwd.isNil: "SUM(count)" else: "count"),
-      # If the search is ordered by time, include the most-recent-usage timestamp
-      # as well as command and count.
-      (if orderByTimeStamp: ", " & datetimeConversion else: "")
-    ]
-    # Keep a list of args to be included for parameter interpolation.
-    args: seq[string] = @[tableName]
+    q = @[selectStmt % [selectColumns.join(","), tableName]]
+    # Keep a list of args to be included for parameter
+    # interpolation.
+    args: seq[string] = @[]
     addedWhere = false
 
   proc handleWhere() =
@@ -115,11 +124,12 @@ proc dbSearch*(
   q.add limitStmt
   args.add $limit
 
+  let query = q.join(" ")
   log "Executing query:\n$1\nwith $2 argument(s): $3\n" % [
-      q, $args.len, args.join(", ")
+      query, $args.len, args.join(", ")
     ]
 
-  result = db.getAllRows(q.sql, args).mapIt(SearchResponse(
+  result = db.getAllRows(query.sql, args).mapIt(SearchResponse(
     cmd: it[0],
     count: it[1],
     timestamp: if orderByTimeStamp: it[2] else: nil
