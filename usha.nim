@@ -1,6 +1,6 @@
 ## Useful command-line utility that maintains a simple database of
 ## shell commands along with their frequency.
-import os, docopt, strutils, sequtils
+import os, docopt, strutils, sequtils, sets
 from db_sqlite import DbError, Row
 import ushapkg/[db, logger]
 
@@ -25,26 +25,17 @@ Options:
   -v              Verbose.
 """ % programName
 
-proc filter(cmd: string): bool =
-  ## Maintain a list of common commands not to be included.
-  const stopWords = [programName, "exit"]
+proc filter(stopWords: HashSet[string], cmd: string): bool =
+  ## Verify that a word is not 0-length and is not in the ignore
+  ## list.
   case cmd
   of "":
     false
   else:
-    case cmd.split[0]
-    of stopWords:
-      false
-    else:
-      true
+    not stopWords.isValid or cmd.split[0] notin stopWords
 
-proc displayResults(results: seq[Row]) =
-  let
-    showDate = results[0].len > 2
-    lineWidth = results.mapIt(it[0].len + it[1].len).max + 2
-  for row in results:
-    let dateStr = if showDate: "  " & row[2] else: ""
-    echo row[0] & row[1].align(lineWidth - row[0].len) & dateStr
+proc displayResults(results: seq[SearchResponse]) =
+  echo results.format()
 
 proc handleDbError(e: ref DbError, msg: string) =
   case e.msg
@@ -65,8 +56,8 @@ proc historyInit() {.raises: [].} =
     except ValueError:
       quit "Unknown failure during database initialization."
 
-proc historyUpdate(cwd, cmd: string) {.raises: [].} =
-  if filter(cmd):
+proc historyUpdate(cwd, cmd: string, stopWords: HashSet[string]) {.raises: [].} =
+  if stopWords.filter(cmd):
     try:
       dbInsert(cwd, cmd)
     except DbError as e:
@@ -83,7 +74,7 @@ proc historyClean(args: Table[string, docopt.Value]) {.raises: [] .} =
   except ValueError:
     quit "Argument provided to `clean` must be a number."
 
-proc main(args: Table[string, docopt.Value]) {.raises: [].} =
+proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
   ## Parse command arguments and perform a search of the history database.
   try:
     var orderBy: OrderBy
@@ -131,10 +122,18 @@ when isMainModule:
     historyInit()
 
   elif args["update"]:
-    historyUpdate(getCurrentDir(), $args["CMD"])
+    var ignoreLines: HashSet[string]
+    const ignoreFile = ".ushaignore"
+
+    let
+      ignorePath = getHomeDir() / ignoreFile
+    if existsFile(ignorePath):
+      ignoreLines = toSeq(lines(ignorePath)).toSet
+
+    historyUpdate(getCurrentDir(), $args["CMD"], ignoreLines)
 
   elif args["clean"]:
     historyClean(args)
 
   else:
-    main(args)
+    historySearch(args)

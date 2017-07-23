@@ -1,4 +1,4 @@
-import db_sqlite, os, strutils
+import db_sqlite, os, strutils, sequtils
 import logger
 
 var db: DbConn
@@ -35,12 +35,31 @@ proc dbInit*() =
   db.exec sql"CREATE INDEX IF NOT EXISTS count_order_idx ON ? (count)", tableName
   db.exec sql"CREATE INDEX IF NOT EXISTS entered_order_idx ON ? (entered_on)", tableName
 
+type SearchResponse* = object
+  cmd, count, timestamp: string
+
+proc lineWidth(resp: SearchResponse): int =
+  resp.cmd.len + resp.count.len + 2
+
+proc toLine(resp: SearchResponse, maxLineWidth: int): string =
+  var dateStr: string
+  if not resp.timestamp.isNil:
+    dateStr = "  " & resp.timestamp
+  else:
+    dateStr = ""
+
+  result = resp.cmd & resp.count.align(maxLineWidth - resp.cmd.len) & dateStr
+
+proc format*(responses: seq[SearchResponse]): string =
+  let lineWidth = responses.mapIt(it.lineWidth).max
+  result = responses.mapIt(it.toLine(lineWidth)).join("\n")
+
 proc dbSearch*(
   cwd: string,
   limit: int,
   containsStr: string,
   orderBy: OrderBy
-): seq[Row] =
+): seq[SearchResponse] =
   ## Search the database for commands.
   const
     selectStmt          = "SELECT cmd, $1$2 FROM ? "
@@ -54,12 +73,13 @@ proc dbSearch*(
     groupBy             = "GROUP BY cmd "
   # Start building a SQL query.
   var
+    orderByTimeStamp = orderBy == obEnteredOn
     q = selectStmt % [
       # In global search, work with total command counts
       (if cwd.isNil: "SUM(count)" else: "count"),
       # If the search is ordered by time, include the most-recent-usage timestamp
       # as well as command and count.
-      (if orderBy == obEnteredOn: ", " & datetimeConversion else: "")
+      (if orderByTimeStamp: ", " & datetimeConversion else: "")
     ]
     # Keep a list of args to be included for parameter interpolation.
     args: seq[string] = @[tableName]
@@ -99,7 +119,11 @@ proc dbSearch*(
       q, $args.len, args.join(", ")
     ]
 
-  result = db.getAllRows(q.sql, args)
+  result = db.getAllRows(q.sql, args).mapIt(SearchResponse(
+    cmd: it[0],
+    count: it[1],
+    timestamp: if orderByTimeStamp: it[2] else: nil
+  ))
 
 proc dbInsert*(cwd, cmd: string)  =
   db.exec sql"""
