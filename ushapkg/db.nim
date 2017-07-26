@@ -70,7 +70,7 @@ proc dbSearch*(
     where               = "WHERE"
     whereAnd            = "AND"
     cwdEquals           = "cwd = ?"
-    cwdLike             = "cwd LIKE ?"
+    cwdLike             = "( cwd = ? OR cwd LIKE ? )"
     whereLike           = "cmd LIKE ?"
     orderByStr          = "ORDER BY $1 DESC"
     limitStmt           = "LIMIT ?"
@@ -110,6 +110,7 @@ proc dbSearch*(
     handleWhere()
     if recurse:
       q.add cwdLike
+      args.add cwd
       args.add "$1/%" % cwd
     else:
       q.add cwdEquals
