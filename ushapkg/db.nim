@@ -58,7 +58,8 @@ proc dbSearch*(
   cwd: string,
   limit: int,
   containsStr: string,
-  orderBy: OrderBy
+  orderBy: OrderBy,
+  recurse: bool
 ): seq[SearchResponse] =
   ## Search the database for commands.
   const
@@ -68,7 +69,8 @@ proc dbSearch*(
     datetimeConversion  = "datetime(entered_on, \"localtime\")"
     where               = "WHERE"
     whereAnd            = "AND"
-    whereCwd            = "cwd = ?"
+    cwdEquals           = "cwd = ?"
+    cwdLike             = "cwd LIKE ?"
     whereLike           = "cmd LIKE ?"
     orderByStr          = "ORDER BY $1 DESC"
     limitStmt           = "LIMIT ?"
@@ -106,8 +108,12 @@ proc dbSearch*(
   if not cwd.isNil:
     # If a directory was specified, add a lookup against `cwd`.
     handleWhere()
-    q.add whereCwd
-    args.add cwd
+    if recurse:
+      q.add cwdLike
+      args.add "$1/%" % cwd
+    else:
+      q.add cwdEquals
+      args.add cwd
 
   if not containsStr.isNil:
     # If a search string was specified, add a LIKE clause.

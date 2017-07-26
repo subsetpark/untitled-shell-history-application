@@ -13,7 +13,7 @@ Usage:
   $1 init [-v]
   $1 clean [DAYS]
   $1 update [-v] CMD
-  $1 [DIR] [-n N] [-s SEARCHSTRING] [-t] [-v]
+  $1 [DIR] [-n N] [-tvrs SEARCHSTRING]
 
 Options:
   DIR             Directory to search within.
@@ -23,6 +23,7 @@ Options:
   -s SEARCHSTRING Search for commands containing a string.
   -t              Order by most recently entered.
   -v              Verbose.
+  -r              Recurse current directory.
 """ % programName
 
 proc filter(stopWords: HashSet[string], cmd: string): bool =
@@ -93,7 +94,7 @@ proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
     else:
       orderBy = obCount
 
-    let results = dbSearch(cwd, n, containsStr, orderBy)
+    let results = dbSearch(cwd, n, containsStr, orderBy, args["-r"])
     if results.len > 0:
       displayResults(results)
 
