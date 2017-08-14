@@ -3,7 +3,9 @@ import logger
 
 var db: DbConn
 
-const tableName* = "history"
+const
+  tableName* = "history"
+  dbName = ".esdb"
 
 type OrderBy* = enum
   obCount = "count"
@@ -12,7 +14,6 @@ type OrderBy* = enum
 
 proc dbOpen*(): DbConn =
   ## Open a DB connection.
-  const dbName = ".esdb"
   let dbPath = getHomeDir() / dbName
 
   db = open(dbPath, nil, nil, nil)
@@ -23,6 +24,24 @@ proc dbClose*() =
   db.close()
 
 proc dbInit*() =
+
+  proc logEnsureTable(tableName: string) =
+    log("Ensuring presence of $1 table at $2..." % [
+      tableName, dbName
+    ], llInfo)
+
+    doVerbose:
+      let tableCheck = db.getRow(sql"""
+        SELECT 1 FROM sqlite_master WHERE type="table" AND name=?
+      """, tableName)
+      if tableCheck[0] == "":
+        log "Table $1 not found. Creating..." % tableName
+      else:
+        log "Table $1 found." % tableName
+
+  log "Initializing $1 database." % programName
+
+  logEnsureTable "history"
   db.exec sql"""
     CREATE TABLE IF NOT EXISTS ? (
         id          INTEGER PRIMARY KEY,
@@ -34,10 +53,23 @@ proc dbInit*() =
   db.exec sql"CREATE UNIQUE INDEX IF NOT EXISTS command_idx ON ? (cwd, cmd)", tableName
   db.exec sql"CREATE INDEX IF NOT EXISTS count_order_idx ON ? (count)", tableName
   db.exec sql"CREATE INDEX IF NOT EXISTS entered_order_idx ON ? (entered_on)", tableName
+
+  logEnsureTable "checksum"
   db.exec sql"""
     CREATE TABLE IF NOT EXISTS checksum (
         hash        VARCHAR(256)
     )"""
+
+  doVerbose:
+    log "Checking for checksum value..."
+    let checksumValue = db.getRow(sql"""
+      SELECT hash FROM checksum
+    """)
+    if checksumValue[0] == "":
+      log "Checksum not present. Inserting empty value."
+    else:
+      log "Checksum present. Value: " & checksumValue[0]
+
   db.exec sql"""
     INSERT INTO checksum
     SELECT "" WHERE NOT EXISTS (

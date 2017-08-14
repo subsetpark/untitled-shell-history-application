@@ -4,9 +4,7 @@ import os, docopt, strutils, sequtils, sets
 from db_sqlite import DbError, Row
 import ushapkg/[db, logger]
 
-const
-  programName = "usha"
-  help = """
+const help = """
 $1: search your command-line history.
 
 Usage:
@@ -52,6 +50,7 @@ proc handleDbError(e: ref DbError, msg: string) =
 
 # User functions
 proc historyInit() {.raises: [].} =
+  const failureMsg = "Unknown failure during database initialization."
   try:
     dbInit()
   except DbError as e:
@@ -59,7 +58,9 @@ proc historyInit() {.raises: [].} =
     try:
       quit "Could not initialize $1 database." % programName
     except ValueError:
-      quit "Unknown failure during database initialization."
+      quit failureMsg
+  except ValueError:
+    quit failureMsg
 
 proc historyUpdate(args: Table[string, docopt.Value]) {.raises: [].} =
   const
