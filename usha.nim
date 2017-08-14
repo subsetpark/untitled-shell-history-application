@@ -12,7 +12,7 @@ hist: search your command-line history.
 Usage:
   $1 init [-v]
   $1 clean [DAYS]
-  $1 update [-v] CMD
+  $1 update [-v] CMD [-c CHECKSUM]
   $1 [DIR] [-n N] [-tvrs SEARCHSTRING]
 
 Options:
@@ -24,6 +24,7 @@ Options:
   -t              Order by most recently entered.
   -v              Verbose.
   -r              Recurse current directory.
+  -c CHECKSUM     Optional argument to update to prevent duplication.
 """ % programName
 
 proc filter(stopWords: HashSet[string], cmd: string): bool =
@@ -57,10 +58,11 @@ proc historyInit() {.raises: [].} =
     except ValueError:
       quit "Unknown failure during database initialization."
 
-proc historyUpdate(cwd, cmd: string, stopWords: HashSet[string]) {.raises: [].} =
+proc historyUpdate(cwd, cmd, checksum: string, stopWords: HashSet[string]) {.raises: [].} =
   if stopWords.filter(cmd):
     try:
-      dbInsert(cwd, cmd)
+       if checksum.isNil or dbChecksum(checksum):
+         dbInsert(cwd, cmd, checksum)
     except DbError as e:
       try:
         handleDbError(e, "Could not insert command into $1 database." % programName)
@@ -131,7 +133,7 @@ when isMainModule:
     if existsFile(ignorePath):
       ignoreLines = toSeq(lines(ignorePath)).toSet
 
-    historyUpdate(getCurrentDir(), $args["CMD"], ignoreLines)
+    historyUpdate(getCurrentDir(), $args["CMD"], $args["-c"], ignoreLines)
 
   elif args["clean"]:
     historyClean(args)
