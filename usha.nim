@@ -129,11 +129,12 @@ when isMainModule:
     const ignoreFile = ".ushaignore"
 
     let
+      checksum = if args["-c"]: $args["-c"] else: nil
       ignorePath = getHomeDir() / ignoreFile
     if existsFile(ignorePath):
       ignoreLines = toSeq(lines(ignorePath)).toSet
 
-    historyUpdate(getCurrentDir(), $args["CMD"], $args["-c"], ignoreLines)
+    historyUpdate(getCurrentDir(), $args["CMD"], checksum, ignoreLines)
 
   elif args["clean"]:
     historyClean(args)
