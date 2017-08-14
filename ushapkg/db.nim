@@ -34,6 +34,15 @@ proc dbInit*() =
   db.exec sql"CREATE UNIQUE INDEX IF NOT EXISTS command_idx ON ? (cwd, cmd)", tableName
   db.exec sql"CREATE INDEX IF NOT EXISTS count_order_idx ON ? (count)", tableName
   db.exec sql"CREATE INDEX IF NOT EXISTS entered_order_idx ON ? (entered_on)", tableName
+  db.exec sql"""
+    CREATE TABLE IF NOT EXISTS checksum (
+        hash        VARCHAR(256)
+    )"""
+  db.exec sql"""
+    INSERT INTO checksum
+    SELECT "" WHERE NOT EXISTS (
+      SELECT 1 FROM checksum
+    )"""
 
 type SearchResponse* = object
   cmd, count, timestamp: string
@@ -142,13 +151,28 @@ proc dbSearch*(
     timestamp: if orderByTimeStamp: it[2] else: nil
   ))
 
-proc dbInsert*(cwd, cmd: string)  =
+proc dbChecksum*(checksum: string): bool =
+  log "Checking checksum against value: " & checksum
+
+  let currentValue = db.getValue sql"""
+    SELECT hash FROM checksum LIMIT 1
+  """
+  log "Current checksum value: " & currentValue
+
+  currentValue != checksum
+
+proc dbInsert*(cwd, cmd, checksum: string)  =
   db.exec sql"""
     INSERT OR REPLACE INTO ?
       (cwd, cmd, count) VALUES
       (?, ?, COALESCE(
         (SELECT count FROM ? WHERE cwd=? AND cmd=?), 0) + 1)
       """, tableName, cwd, cmd, tableName, cwd, cmd
+  if not checksum.isNil:
+    log "Updating checksum with value: " & checksum
+    db.exec sql"""
+      UPDATE checksum SET hash = ?
+    """, checksum
 
 proc dbClean*(days: string)  =
   let
