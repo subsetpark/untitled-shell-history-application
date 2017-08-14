@@ -7,7 +7,7 @@ import ushapkg/[db, logger]
 const
   programName = "usha"
   help = """
-hist: search your command-line history.
+$1: search your command-line history.
 
 Usage:
   $1 init [-v]
@@ -17,8 +17,8 @@ Usage:
 
 Options:
   DIR             Directory to search within.
-  CMD          Insert command into database.
-  DAYS         Number of days of history to preserve. [default: 60]
+  CMD             Insert command into database.
+  DAYS            Number of days of history to preserve. [default: 60]
   -n N            Retrieve the N most common commands. [default: 5]
   -s SEARCHSTRING Search for commands containing a string.
   -t              Order by most recently entered.
@@ -27,9 +27,12 @@ Options:
   -c CHECKSUM     Optional argument to update to prevent duplication.
 """ % programName
 
-proc filter(stopWords: HashSet[string], cmd: string): bool =
+proc filter(ignorePath, cmd: string): bool =
   ## Verify that a command is not 0-length and is not in the ignore
   ## list.
+  if not existsFile(ignorePath):
+    return true
+  let stopWords = toSeq(lines(ignorePath)).toSet
   case cmd
   of "":
     false
@@ -58,18 +61,32 @@ proc historyInit() {.raises: [].} =
     except ValueError:
       quit "Unknown failure during database initialization."
 
-proc historyUpdate(cwd, cmd, checksum: string, stopWords: HashSet[string]) {.raises: [].} =
-  if stopWords.filter(cmd):
+proc historyUpdate(args: Table[string, docopt.Value]) {.raises: [].} =
+  const
+    ignoreFile = ".$1ignore" % programName
+    genericErrorMessage = "Unknown failure during database insertion."
+
+  try:
+    let
+      cwd = getCurrentDir()
+      cmd = $args["CMD"]
+      checksum = if args["-c"]: $args["-c"] else: nil
+      ignorePath = getHomeDir() / ignoreFile
+
+    if not ignorePath.filter(cmd):
+      log "Skipping update; value in stop words: " & cmd
+    elif not checksum.isNil and not dbChecksum(checksum):
+      log "Skipping update; checksum matches: " & checksum
+    else:
+      dbInsert(cwd, cmd, checksum)
+
+  except DbError as e:
     try:
-       if checksum.isNil or dbChecksum(checksum):
-         dbInsert(cwd, cmd, checksum)
-       else:
-         log "Skipping update; checksum matches: " & checksum
-    except DbError as e:
-      try:
-        handleDbError(e, "Could not insert command into $1 database." % programName)
-      except ValueError:
-        quit "Unknown failure during database insertion."
+      handleDbError(e, "Could not insert command into $1 database." % programName)
+    except ValueError:
+      quit genericErrorMessage
+  except Exception, AssertionError, IOError:
+    quit genericErrorMessage
 
 proc historyClean(args: Table[string, docopt.Value]) {.raises: [] .} =
   try:
@@ -114,32 +131,23 @@ proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
     except ValueError:
       quit "Unknown error during database search."
 
-when isMainModule:
-  var args = docopt(help)
-
+proc processArgs(args: Table[string, Value]) =
   if args["-v"]:
     setLogLevel vVerbose
+
+  if args["init"]:
+    historyInit()
+  elif args["update"]:
+    historyUpdate(args)
+  elif args["clean"]:
+    historyClean(args)
+  else:
+    historySearch(args)
+
+when isMainModule:
+  var args = docopt(help)
 
   discard dbOpen()
   defer: dbClose()
 
-  if args["init"]:
-    historyInit()
-
-  elif args["update"]:
-    var ignoreLines: HashSet[string]
-    const ignoreFile = ".ushaignore"
-
-    let
-      checksum = if args["-c"]: $args["-c"] else: nil
-      ignorePath = getHomeDir() / ignoreFile
-    if existsFile(ignorePath):
-      ignoreLines = toSeq(lines(ignorePath)).toSet
-
-    historyUpdate(getCurrentDir(), $args["CMD"], checksum, ignoreLines)
-
-  elif args["clean"]:
-    historyClean(args)
-
-  else:
-    historySearch(args)
+  processArgs(args)
