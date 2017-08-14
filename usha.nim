@@ -63,6 +63,8 @@ proc historyUpdate(cwd, cmd, checksum: string, stopWords: HashSet[string]) {.rai
     try:
        if checksum.isNil or dbChecksum(checksum):
          dbInsert(cwd, cmd, checksum)
+       else:
+         log "Skipping update; checksum matches: " & checksum
     except DbError as e:
       try:
         handleDbError(e, "Could not insert command into $1 database." % programName)
