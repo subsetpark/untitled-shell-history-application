@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.2"
+version       = "0.3"
 author        = "Zach Smith"
 description   = "untitled shell history application"
 license       = "MIT"
