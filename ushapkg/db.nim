@@ -80,27 +80,38 @@ type SearchResponse* = object
   cmd, count, timestamp: string
 
 proc lineWidth(resp: SearchResponse): int =
-  resp.cmd.len + resp.count.len + 2
+  result = resp.cmd.len
+  if not resp.count.isNil:
+    result += resp.count.len + 2
 
 proc toLine(resp: SearchResponse, maxLineWidth: int): string =
-  var dateStr: string
+  result = resp.cmd
+  if not resp.count.isNil:
+    result.add(resp.count.align(maxLineWidth - resp.cmd.len))
   if not resp.timestamp.isNil:
-    dateStr = "  " & resp.timestamp
-  else:
-    dateStr = ""
+    result.add("  " & resp.timestamp)
 
-  result = resp.cmd & resp.count.align(maxLineWidth - resp.cmd.len) & dateStr
-
-proc format*(responses: seq[SearchResponse]): string =
+proc formatResponses*(responses: seq[SearchResponse]): string =
   let lineWidth = responses.mapIt(it.lineWidth).max
   result = responses.mapIt(it.toLine(lineWidth)).join("\n")
+
+converter toSearchResponse(rows: seq[Row]): seq[SearchResponse] =
+  result = newSeqWith(rows.len, SearchResponse())
+  for i in rows.low..rows.high:
+    let row = rows[i]
+    result[i].cmd = row[0]
+    if row.len > 1:
+      result[i].count = row[1]
+    if row.len > 2:
+      result[i].timestamp = row[2]
 
 proc dbSearch*(
   cwd: string,
   limit: int,
   containsStr: string,
   orderBy: OrderBy,
-  recurse: bool
+  recurse: bool,
+  cmdOnly: bool
 ): seq[SearchResponse] =
   ## Search the database for commands.
   const
@@ -120,15 +131,16 @@ proc dbSearch*(
   let orderByTimeStamp = orderBy == obEnteredOn
   var selectColumns = @["cmd"]
 
-  if cwd.isNil:
-    # In global search, work with total command counts.
-    selectColumns.add(sumCount)
-  else:
-    selectColumns.add(justCount)
-  if orderByTimeStamp:
-    # If the search is ordered by time, include the
-    # most-recent-usage timestamp as well as command and count.
-    selectColumns.add(datetimeConversion)
+  if not cmdOnly:
+    if cwd.isNil:
+      # In global search, work with total command counts.
+      selectColumns.add(sumCount)
+    else:
+      selectColumns.add(justCount)
+    if orderByTimeStamp:
+      # If the search is ordered by time, include the
+      # most-recent-usage timestamp as well as command and count.
+      selectColumns.add(datetimeConversion)
 
   var
     q = @[selectStmt % [selectColumns.join(","), tableName]]
@@ -177,11 +189,7 @@ proc dbSearch*(
       query, $args.len, args.join(", ")
     ]
 
-  result = db.getAllRows(query.sql, args).mapIt(SearchResponse(
-    cmd: it[0],
-    count: it[1],
-    timestamp: if orderByTimeStamp: it[2] else: nil
-  ))
+  result = db.getAllRows(query.sql, args)
 
 proc dbChecksum*(checksum: string): bool =
   log "Checking checksum against value: " & checksum

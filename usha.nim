@@ -11,18 +11,19 @@ Usage:
   $1 init [-v]
   $1 clean [DAYS]
   $1 update [-v] CMD [-c CHECKSUM]
-  $1 [DIR] [-n N] [-tvrs SEARCHSTRING]
+  $1 [DIR] [-ltvr] [-s SEARCHSTRING] [-n N]
 
 Options:
-  DIR             Directory to search within.
-  CMD             Insert command into database.
+  -v              Verbose.
   DAYS            Number of days of history to preserve. [default: 60]
+  CMD             Insert command into database.
+  -c CHECKSUM     Optional argument to update to prevent duplication.
+  DIR             Directory to search within.
   -n N            Retrieve the N most common commands. [default: 5]
   -s SEARCHSTRING Search for commands containing a string.
   -t              Order by most recently entered.
-  -v              Verbose.
   -r              Recurse current directory.
-  -c CHECKSUM     Optional argument to update to prevent duplication.
+  -l              Lucky mode.
 """ % programName
 
 proc filter(ignorePath, cmd: string): bool =
@@ -38,7 +39,7 @@ proc filter(ignorePath, cmd: string): bool =
     not stopWords.isValid or cmd.split[0] notin stopWords
 
 proc displayResults(results: seq[SearchResponse]) =
-  echo results.format()
+  echo results.formatResponses()
 
 proc handleDbError(e: ref DbError, msg: string) =
   case e.msg
@@ -103,7 +104,7 @@ proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
     var orderBy: OrderBy
 
     let
-      n = ($args["-n"]).parseInt
+      n = if args["-l"]: 1 else: ($args["-n"]).parseInt
       containsStr = if args["-s"]: $args["-s"] else: nil
       cwd = if args["DIR"]: expandFileName($args["DIR"]) else: nil
     # Ordering: in time-based ordering, order by time most recently entered.
@@ -116,7 +117,7 @@ proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
     else:
       orderBy = obCount
 
-    let results = dbSearch(cwd, n, containsStr, orderBy, args["-r"])
+    let results = dbSearch(cwd, n, containsStr, orderBy, args["-r"], args["-l"])
     if results.len > 0:
       displayResults(results)
 
