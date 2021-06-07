@@ -16,7 +16,7 @@ proc dbOpen*(): DbConn =
   ## Open a DB connection.
   let dbPath = getHomeDir() / dbName
 
-  db = open(dbPath, nil, nil, nil)
+  db = open(dbPath, "", "", "")
   return db
 
 proc dbClose*() =
@@ -81,14 +81,14 @@ type SearchResponse* = object
 
 proc lineWidth(resp: SearchResponse): int =
   result = resp.cmd.len
-  if not resp.count.isNil:
+  if resp.count != "":
     result += resp.count.len + 2
 
 proc toLine(resp: SearchResponse, maxLineWidth: int): string =
   result = resp.cmd
-  if not resp.count.isNil:
+  if resp.count != "":
     result.add(resp.count.align(maxLineWidth - resp.cmd.len))
-  if not resp.timestamp.isNil:
+  if resp.timestamp != "":
     result.add("  " & resp.timestamp)
 
 proc formatResponses*(responses: seq[SearchResponse]): string =
@@ -132,7 +132,7 @@ proc dbSearch*(
   var selectColumns = @["cmd"]
 
   if not cmdOnly:
-    if cwd.isNil:
+    if cwd == "":
       # In global search, work with total command counts.
       selectColumns.add(sumCount)
     else:
@@ -158,7 +158,7 @@ proc dbSearch*(
       q.add where
       addedWhere = true
 
-  if not cwd.isNil:
+  if cwd != "":
     # If a directory was specified, add a lookup against `cwd`.
     handleWhere()
     if recurse:
@@ -169,13 +169,13 @@ proc dbSearch*(
       q.add cwdEquals
       args.add cwd
 
-  if not containsStr.isNil:
+  if containsStr != "":
     # If a search string was specified, add a LIKE clause.
     handleWhere()
     q.add whereLike
     args.add("%$1%" % containsStr)
 
-  if cwd.isNil:
+  if cwd == "":
     # In global search, only show each command once.
     q.add groupBy
 
@@ -208,7 +208,7 @@ proc dbInsert*(cwd, cmd, checksum: string)  =
       (?, ?, COALESCE(
         (SELECT count FROM ? WHERE cwd=? AND cmd=?), 0) + 1)
       """, tableName, cwd, cmd, tableName, cwd, cmd
-  if not checksum.isNil:
+  if checksum != "":
     log "Updating checksum with value: " & checksum
     db.exec sql"""
       UPDATE checksum SET hash = ?

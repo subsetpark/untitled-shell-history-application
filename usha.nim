@@ -29,14 +29,14 @@ Options:
 proc filter(ignorePath, cmd: string): bool =
   ## Verify that a command is not 0-length and is not in the ignore
   ## list.
-  if not existsFile(ignorePath):
+  if not fileExists(ignorePath):
     return true
-  let stopWords = toSeq(lines(ignorePath)).toSet
+  let stopWords = toSeq(lines(ignorePath)).toHashSet
   case cmd
   of "":
     false
   else:
-    not stopWords.isValid or cmd.split[0] notin stopWords
+    cmd.split[0] notin stopWords
 
 proc displayResults(results: seq[SearchResponse]) =
   echo results.formatResponses()
@@ -72,12 +72,12 @@ proc historyUpdate(args: Table[string, docopt.Value]) {.raises: [].} =
     let
       cwd = getCurrentDir()
       cmd = $args["CMD"]
-      checksum = if args["-c"]: $args["-c"] else: nil
+      checksum = if args["-c"]: $args["-c"] else: ""
       ignorePath = getHomeDir() / ignoreFile
 
     if not ignorePath.filter(cmd):
       log "Skipping update; value in stop words: " & cmd
-    elif not checksum.isNil and not dbChecksum(checksum):
+    elif checksum != "" and not dbChecksum(checksum):
       log "Skipping update; checksum matches: " & checksum
     else:
       dbInsert(cwd, cmd, checksum)
@@ -87,10 +87,10 @@ proc historyUpdate(args: Table[string, docopt.Value]) {.raises: [].} =
       handleDbError(e, "Could not insert command into $1 database." % programName)
     except ValueError:
       quit genericErrorMessage
-  except Exception, AssertionError, IOError:
+  except Exception, AssertionDefect, IOError:
     quit genericErrorMessage
 
-proc historyClean(args: Table[string, docopt.Value]) {.raises: [] .} =
+proc historyClean(args: Table[string, docopt.Value]) {.raises: [ref ValueError] .} =
   try:
     dbClean($args["DAYS"])
   except DbError:
@@ -105,14 +105,14 @@ proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
 
     let
       n = if args["-l"]: 1 else: ($args["-n"]).parseInt
-      containsStr = if args["-s"]: $args["-s"] else: nil
-      cwd = if args["DIR"]: expandFileName($args["DIR"]) else: nil
+      containsStr = if args["-s"]: $args["-s"] else: ""
+      cwd = if args["DIR"]: expandFileName($args["DIR"]) else: ""
     # Ordering: in time-based ordering, order by time most recently entered.
     # Otherwise, use count; within a single directory, use the count for that
     # entry; otherwise, use the sum of counts for all entries for that command.
     if args["-t"]:
       orderBy = obEnteredOn
-    elif cwd.isNil:
+    elif cwd == "":
       orderBy = obSumCount
     else:
       orderBy = obCount
@@ -123,7 +123,7 @@ proc historySearch(args: Table[string, docopt.Value]) {.raises: [].} =
 
   except ValueError:
     quit "Value supplied for -n must be a number."
-  except OverflowError:
+  except OverflowDefect:
     quit "Value supplied for -n out of bounds."
   except OSError:
     quit "No such directory."
@@ -146,10 +146,13 @@ proc processArgs(args: Table[string, Value]) =
   else:
     historySearch(args)
 
-when isMainModule:
+proc main =
   var args = docopt(help)
 
   discard dbOpen()
   defer: dbClose()
 
   processArgs(args)
+
+when isMainModule:
+  main()
